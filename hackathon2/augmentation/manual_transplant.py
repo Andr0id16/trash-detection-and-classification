@@ -10,20 +10,33 @@ import threading
 from progress.bar import IncrementalBar
 
 cwd = os.getcwd()
-image_no = 0
-no_of_images = 200  # no of images to process
+image_no = 5
+no_of_images = 30  # no of images to process
 bar = IncrementalBar("Processing", max=no_of_images)  # create a progress bar
-
 
 with open("data/annotations.json", "r") as f:
     jsonfile = f.read()  # the json file as string
-    annotations = json.loads(jsonfile)  # actual json as dictionary
-    images_dicts = annotations["images"][:no_of_images]  # get image data as list
-    image_annotation_dicts = annotations["annotations"][
+    annotations_file = json.loads(jsonfile)  # actual json as dictionary
+    images_data = annotations_file["images"][:no_of_images]  # get image data as list
+    annotations = annotations_file["annotations"][
         :no_of_images
     ]  # get annotation data as list
-recipient = Image.open(os.path.join(cwd, "recipients\\recipient2.jpg"))
-recipient_size = recipient.size
+
+
+class TacoImage:
+    def __init__(self, annotation):
+        global images_data
+        self.segmentation = annotation["segmentation"][0]
+        self.points = getpoints(self.segmentation)
+        self.id = annotation["image_id"]
+        self.path = images_data[self.id]["file_name"]
+        self.image = Image.open("data/" + self.path)
+
+
+recipients = list()
+for recipient in os.listdir("recipients"):
+    print(f"recipients\{recipient}")
+    recipients.append(Image.open(f"recipients\{recipient}"))
 
 
 def getpoints(seg: list[int]):
@@ -46,96 +59,81 @@ def getmask(size: tuple, points: list[tuple[int, int]]):
     total_white = np.sum(mask_array)
     total = (shape[0] * shape[1]) * (255 * 3)
     percentage = total_white / total * 100
-    return mask, percentage
+    center = np.average(points, axis=0)
+    # mask.show()
+    return mask, percentage, center
 
 
 def resize(object, percentage: int):
     """uses exponential function to scale images inversely proportional to their original size"""
-    if percentage >= 1.5 or percentage <= 0.2:
+    scale = 0
+    if percentage >= 1:
         scale = math.pow(math.e, -math.log10(4 * percentage))
+    elif percentage <= 1:
+        scale = math.pow(math.e, -math.log10(0.8 * percentage))
+        scale = 10
+
+    if scale < 1:
         object = object.resize(
             (int(object.size[0] * scale), int(object.size[1] * scale))
         )
+    else:
+        object = object.resize(
+            (int(object.size[0] * scale), int(object.size[1] * scale)), Image.BICUBIC
+        )
+
+        # print(f"percentage= {percentage}% scale={scale}", flush=True)
 
     return object
+
+
+# def transplant_segment(anno, target, paste_pos: tuple[int, int])
+def transplant_segment(tacoimage: TacoImage, target, paste_pos: tuple[int, int]):
+
+    global image_no
+    image = tacoimage.image
+    # if not (image.size == target.size):
+    #     target = target.transpose(Image.ROTATE_90)
+    #     paste_pos = (1200, 500)
+    points = getpoints(tacoimage.segmentation)
+    mask, percentage, centre = getmask(image.size, points)
+    if percentage >= 1:
+
+        object = Image.composite(image, mask, mask)
+        # object.show()
+        object = resize(object, percentage)
+        target.paste(object, paste_pos, object)
+        # target.show()
+        image_no += 1
+        target.save(
+            f"mt/{percentage}%_{time.process_time_ns()+random.randint(0,10)}.png"
+        )
+    bar.next()
+
+
+start_time = time.perf_counter()
+tacoimages = [TacoImage(annotation) for annotation in annotations[:1500]]
+total_time = time.perf_counter() - start_time
+print(f"Finished generating tacoimages in {total_time}s")
+positions = [(), (), (), ()]
 
 
 def transplant():
 
     threads = []
-    for anno in image_annotation_dicts[:no_of_images]:
+    for tacoimage in tacoimages:
         thread = threading.Thread(
-            target=transplant_segment, args=(anno, recipient.copy())
+            target=transplant_segment,
+            args=(
+                tacoimage,
+                random.choice(recipients).copy(),
+                (random.randint(250, 450), random.randint(250, 550)),
+            ),
         )
         threads.append(thread)
         thread.start()
     for thread in threads:
         thread.join()
-
-
-def transplant_segment(anno, target):
-    # sema.acquire()
-    global image_no
-    # for anno in image_annotation_dicts:
-    image_id = anno["image_id"]
-    # print(image_id)
-    # locks[image_id].acquire()
-
-    paste_pos = (400, 500)
-    ## SEGMENT METHOD
-    image_data = images_dicts[image_id]
-    image_path = image_data["file_name"]
-    image_path = os.path.join(cwd, "data", image_path)
-    image = Image.open(image_path)
-    # print(image.size)
-    if not (image.size == recipient_size):
-        target = target.transpose(Image.ROTATE_90)
-        paste_pos = (1200, 500)
-    seg = anno["segmentation"][0]
-    points = getpoints(seg)
-    mask, percentage = getmask(image.size, points)
-
-    object = Image.composite(image, mask, mask)
-    object = resize(object, percentage)
-
-    target.paste(object, paste_pos, object)
-
-    image_no += 1
-    target.save(f"mt/{time.process_time_ns()+random.randint(0,10)}.png")
-    bar.next()
-
-
-def bbox():
-    ## BBOX METHOD
-    # bbox = anno["bbox"]
-    # print(image_id)
-    # print(bbox)
-    # xmin = bbox[0]
-    # ymin = bbox[1]
-    # width = bbox[2]
-    # height = bbox[3]
-    # xmax = width + xmin
-    # ymax = height + ymin
-    # image_data = images_dicts[image_id]
-    # image_path = image_data["file_name"]
-    # print(image_path)
-    # image_path = os.path.join(cwd, "data", image_path)
-    # image = Image.open(image_path)
-    # cropped = image.crop((xmin, ymin, xmax, ymax))
-    # print(cropped.size)
-    # cropped.thumbnail((200, 200), Image.ANTIALIAS)
-    # cropped_w, cropped_h = cropped.size
-
-    # recipient_copy.paste(
-    #     cropped,
-    #     (
-    #         int(max(0, cropped_w)),
-    #         int(max(0, cropped_h)),
-    #     ),
-    # )
-    # recipient_copy.save(f"{image_no}.jpg")
-    # image_no += 1
-    pass
 
 
 if __name__ == "__main__":
