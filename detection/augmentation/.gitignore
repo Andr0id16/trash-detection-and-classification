@@ -1,4 +1,3 @@
 data/
-mt/
+transplant_dataset/
 recipients/
-transplant.py

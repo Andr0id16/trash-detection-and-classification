@@ -1,3 +1,5 @@
+from __future__ import annotations
+from ast import Str
 import json
 import random
 from typing import List
@@ -9,16 +11,49 @@ import time
 import math
 import threading
 from progress.bar import IncrementalBar
+import copy
+from datetime import datetime
+
+
+def getimage(image_id, width, height):
+    return (
+        {
+            "id": image_id,
+            "width": width,
+            "height": height,
+            "file_name": "image_id",
+            "license": None,
+            "flickr_url": None,
+            "coco_url": None,
+            "date_captured": None,
+            "flickr_640_url": None,
+        },
+    )
+
+
+def getannotation(image_id, category_id, segmentation_data, bbox, iscrowd):
+    global annotation_no
+    annotation_no += 1
+    return {
+        "id": annotation_no,
+        "image_id": image_id,
+        "category_id": category_id,
+        "segmentation": [segmentation_data],
+        "area": bbox[2] * bbox[3],
+        "bbox": bbox,
+        "iscrowd": iscrowd,
+    }
 
 
 class TacoImage:
     def __init__(self, annotation):
         global images_data
         self.segmentation = annotation["segmentation"][0]
-        self.points = getpoints(self.segmentation)
+        self.bbox = annotation["bbox"]
         self.id = annotation["image_id"]
-        self.path = images_data[self.id]["file_name"]
-        self.image = Image.open("data/" + self.path)
+        self.image = Image.open("data/" + images_data[self.id]["file_name"])
+        self.cat = annotation["category_id"]
+        self.iscrowd = annotation["iscrowd"]
 
 
 def getpoints(seg: list[int]):
@@ -46,85 +81,97 @@ def getmask(size: tuple, points: list[tuple[int, int]]):
     return mask, percentage, center
 
 
-def resize(object, percentage: int):
+def resize(object, bbox, segmentation, percentage: int):
     """uses exponential function to scale images inversely proportional to their original size"""
     scale = 0
-    if percentage >= 1:
-        scale = math.pow(math.e, -math.log10(4 * percentage))
-    elif percentage <= 1:
-        scale = math.pow(math.e, -math.log10(0.8 * percentage))
-        scale = 10
-
-    if scale < 1:
-        object = object.resize(
-            (int(object.size[0] * scale), int(object.size[1] * scale))
-        )
-    else:
-        object = object.resize(
-            (int(object.size[0] * scale), int(object.size[1] * scale)), Image.BICUBIC
-        )
-
-        # print(f"percentage= {percentage}% scale={scale}", flush=True)
-
-    return object
+    scale = math.pow(math.e, -math.log10(4 * percentage))
+    object = object.resize((int(object.size[0] * scale), int(object.size[1] * scale)))
+    bbox = list(map(lambda x: scale * x, bbox))
+    segmentation = list(map(lambda x: scale * x, segmentation))
+    return object, bbox, segmentation
 
 
 # def transplant_segment(anno, target, paste_pos: tuple[int, int])
 def transplant_segments(sample: List, target: Image):
+
+    filename = time.process_time_ns() + random.randint(0, 10)
     for no in sample:
-        object = segments[no]
-        target = transplant_segment(
-            object, target, (random.randint(250, 450), random.randint(250, 550))
+        tacoimage = segments[no]
+        xmax = target.size[0] - tacoimage.bbox[0] - tacoimage.bbox[2]
+        ymax = target.size[1] - tacoimage.bbox[1] - tacoimage.bbox[3]
+        xmax = xmax if xmax > 0 else 1
+        ymax = ymax if ymax > 0 else 1
+        paste_pos = (
+            random.randint(0, int(xmax)),
+            random.randint(0, int(ymax)),
         )
-    target.save(f"mt/{time.process_time_ns()+random.randint(0,10)}.png")
+        temp_bbox = copy.deepcopy(tacoimage.bbox)
+        temp_segmentation = copy.deepcopy(tacoimage.segmentation)
+        # modifying bbox and segmentation for pasted object
+        temp_bbox[0:2] = [
+            paste_pos[0] + tacoimage.bbox[0],
+            paste_pos[1] + tacoimage.bbox[1],
+        ]
+        for index in range(len(tacoimage.segmentation)):
+            temp_segmentation[index] += paste_pos[index % 2]
+
+        # add new annotation
+        new_annotations.append(
+            getannotation(
+                filename, tacoimage.cat, temp_segmentation, temp_bbox, tacoimage.iscrowd
+            )
+        )
+
+        # transplant segment
+        target = transplant_segment(tacoimage.image, target, paste_pos)
+
+    target.save(f"transplant_dataset/{filename}.png")
+    new_images.append(getimage(filename, *target.size))
     bar2.next()
 
 
-def transplant_segment(object: Image, target: Image, paste_pos: tuple[int, int]):
+def transplant_segment(object_image, target: Image, paste_pos: tuple[int, int]):
 
-    global image_no
-    # image = tacoimage.image
-    # points = getpoints(tacoimage.segmentation)
-    # mask, percentage, centre = getmask(image.size, points)
-    # if percentage >= 1:
-
-    #     object = Image.composite(image, mask, mask)
-    #     # object.show()
-    #     object = resize(object, percentage)
-    target.paste(object, paste_pos, object)
-    image_no += 1
-
+    target.paste(object_image, paste_pos, object_image)
     return target
 
 
 def getsegments(tacoimage: TacoImage):
 
-    global image_no, segments
+    global segments
     image = tacoimage.image
     points = getpoints(tacoimage.segmentation)
     mask, percentage, centre = getmask(image.size, points)
     if percentage >= 1:
         object = Image.composite(image, mask, mask)
-        object = resize(object, percentage)
-        segments.append(object)
+        tacoimage.image, tacoimage.bbox, tacoimage.segmentation = resize(
+            object, tacoimage.bbox, tacoimage.segmentation, percentage
+        )
+        segments.append(tacoimage)
 
     bar1.next()
 
 
-def segment():
+def segment(start=0):
+    stop = start + 200
+    if start == no_of_images:
+        return
     threads = []
-    for tacoimage in tacoimages:
+    for tacoimage in tacoimages[start:stop]:
         thread = threading.Thread(target=getsegments, args=(tacoimage,))
         threads.append(thread)
         thread.start()
     for thread in threads:
         thread.join()
+    segment(stop)
 
 
-def transplant(samples):
-
+def transplant(samples, start=0):
+    stop = start + 200
+    if start >= no_of_images:
+        return
     threads = []
-    for sample in samples:
+    for sample in samples[start:stop]:
         thread = threading.Thread(
             target=transplant_segments, args=(sample, random.choice(recipients).copy())
         )
@@ -132,21 +179,29 @@ def transplant(samples):
         thread.start()
     for thread in threads:
         thread.join()
+    transplant(samples, stop)
 
 
 if __name__ == "__main__":
 
     ## GLOBALS
     # cwd = os.getcwd()
-    image_no = 5
-    no_of_images = 200  # no of images to process
+    annotation_no = 0
+    new_annotations = []
+    new_images = []
+    licenses = []
+    no_of_images = 2000  # no of images to process
+
     with open("data/annotations.json", "r") as f:
         jsonfile = f.read()  # the json file as string
         annotations_file = json.loads(jsonfile)  # actual json as dictionary
-        images_data = annotations_file["images"][200:500]  # get image data as list
+        images_data = annotations_file["images"][
+            :no_of_images
+        ]  # get image data as list
         annotations = annotations_file["annotations"][
-            200:500
+            :no_of_images
         ]  # get annotation data as list
+        categories = annotations_file["categories"][:no_of_images]
     segments = list()
     recipients = list()
 
@@ -157,7 +212,7 @@ if __name__ == "__main__":
 
     ## READ TACO IMAGES
     start_time = time.perf_counter()
-    tacoimages = [TacoImage(annotation) for annotation in annotations[200:400]]
+    tacoimages = [TacoImage(annotation) for annotation in annotations[:no_of_images]]
     total_time = time.perf_counter() - start_time
     print(f"Finished generating tacoimages in {total_time}s")
 
@@ -170,15 +225,36 @@ if __name__ == "__main__":
     print(f"Finished segmentation in {segmentation_time}s")
 
     ## TRANSPLANTING SEGMENTS
+
     samples = [
         random.sample(range(len(segments)), random.randint(1, 3))
-        for i in range(no_of_images)
+        for _ in range(no_of_images)
     ]
-    print(samples, sep="\n")
+    print(len(segments))
     del tacoimages
     bar2 = IncrementalBar("Processing", max=len(samples))  # create a progress bar
     transplant(samples)
     bar2.finish()
+
+    new_annotation_file = {
+        "info": {
+            "year": 2022,
+            "version": None,
+            "description": "TACO Tranplant",
+            "contributor": None,
+            "url": None,
+            "date_created": f"{datetime.now().strftime('%H:%M:%S')}",
+        },
+        "images": new_images,
+        "annotations": new_annotations,
+        "scene_annotations": None,
+        "licenses": licenses,
+        "categories": categories,
+        "scene_categories": None,
+    }
+    with open("transplant.json", "w") as f:
+        f.write(json.dumps(new_annotation_file))
+
     total_time = time.perf_counter() - start_time
     print(f"Finished execution in {total_time}s")
     print(f"Average time for processing: {total_time/no_of_images}s")
