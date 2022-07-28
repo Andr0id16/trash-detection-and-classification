@@ -16,19 +16,18 @@ from datetime import datetime
 
 
 def getimage(image_id, width, height):
-    return (
-        {
-            "id": image_id,
-            "width": width,
-            "height": height,
-            "file_name": "image_id",
-            "license": None,
-            "flickr_url": None,
-            "coco_url": None,
-            "date_captured": None,
-            "flickr_640_url": None,
-        },
-    )
+    anno = {
+        "id": image_id,
+        "width": width,
+        "height": height,
+        "file_name": f"{image_id}.png",
+        "license": None,
+        "flickr_url": None,
+        "coco_url": None,
+        "date_captured": None,
+        "flickr_640_url": None,
+    }
+    return anno
 
 
 def getannotation(image_id, category_id, segmentation_data, bbox, iscrowd):
@@ -38,9 +37,9 @@ def getannotation(image_id, category_id, segmentation_data, bbox, iscrowd):
         "id": annotation_no,
         "image_id": image_id,
         "category_id": category_id,
-        "segmentation": [segmentation_data],
-        "area": bbox[2] * bbox[3],
         "bbox": bbox,
+        "segmentation": [],
+        "area": bbox[2] * bbox[3],
         "iscrowd": iscrowd,
     }
 
@@ -94,7 +93,8 @@ def resize(object, bbox, segmentation, percentage: int):
 # def transplant_segment(anno, target, paste_pos: tuple[int, int])
 def transplant_segments(sample: List, target: Image):
 
-    filename = time.process_time_ns() + random.randint(0, 10)
+    filename = f"{time.process_time_ns()}{random.randint(0, 10)}{threading.get_ident()}"
+    filename = int(filename)
     for no in sample:
         tacoimage = segments[no]
         xmax = target.size[0] - tacoimage.bbox[0] - tacoimage.bbox[2]
@@ -153,8 +153,8 @@ def getsegments(tacoimage: TacoImage):
 
 
 def segment(start=0):
-    stop = start + 200
-    if start == no_of_images:
+    stop = start + 100
+    if start >= no_of_images:
         return
     threads = []
     for tacoimage in tacoimages[start:stop]:
@@ -167,7 +167,7 @@ def segment(start=0):
 
 
 def transplant(samples, start=0):
-    stop = start + 200
+    stop = start + 100
     if start >= no_of_images:
         return
     threads = []
@@ -190,7 +190,7 @@ if __name__ == "__main__":
     new_annotations = []
     new_images = []
     licenses = []
-    no_of_images = 2000  # no of images to process
+    no_of_images = 1500  # no of images to process
 
     with open("data/annotations.json", "r") as f:
         jsonfile = f.read()  # the json file as string
@@ -230,7 +230,6 @@ if __name__ == "__main__":
         random.sample(range(len(segments)), random.randint(1, 3))
         for _ in range(no_of_images)
     ]
-    print(len(segments))
     del tacoimages
     bar2 = IncrementalBar("Processing", max=len(samples))  # create a progress bar
     transplant(samples)
